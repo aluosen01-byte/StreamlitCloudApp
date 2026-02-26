@@ -4,8 +4,6 @@ import base64, time, re, requests, io, os, zipfile
 from volcenginesdkarkruntime import Ark
 from PIL import Image
 
-import streamlit as st
-
 # 隐藏右下角的 "Made with Streamlit" 和右上角的菜单
 hide_st_style = """
             <style>
