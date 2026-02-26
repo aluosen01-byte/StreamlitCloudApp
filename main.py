@@ -4,6 +4,17 @@ import base64, time, re, requests, io, os, zipfile
 from volcenginesdkarkruntime import Ark
 from PIL import Image
 
+import streamlit as st
+
+# 隐藏右下角的 "Made with Streamlit" 和右上角的菜单
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # =========================================================
 # 0. 安全逻辑锁：时间到达 2026-03-01 17:15 后白屏
