@@ -1,17 +1,26 @@
 import streamlit as st
 from datetime import datetime
 import base64, time, re, requests, io, os, zipfile
-from openai import OpenAI  # 统一使用 OpenAI SDK 调用 ProAI
+from volcenginesdkarkruntime import Ark
 from PIL import Image
 
+# 隐藏右下角的 "Made with Streamlit" 和右上角的菜单
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
 # =========================================================
-# 0. 安全逻辑锁
+# 0. 安全逻辑锁：时间到达 2026-03-01 17:15 后白屏
 # =========================================================
 def check_security_lock():
-    deadline = datetime(2026, 6, 1, 17, 15)
+    # 设定截止时间
+    deadline = datetime(2026, 7, 1, 17, 15)
     if datetime.now() >= deadline:
-        st.error("🔒 系统维护中，请联系管理员。")
         st.stop()
 
 
@@ -20,11 +29,12 @@ check_security_lock()
 # =========================================================
 # 1. 基础配置与环境加载
 # =========================================================
-st.set_page_config(page_title="贝歌流水线 ProAI 版", layout="wide")
+st.set_page_config(page_title="贝歌流水线 v40.5", layout="wide")
 
 
 def load_c(fn, d):
     try:
+        # 优化云端路径读取逻辑
         p = os.path.join(os.getcwd(), fn)
         if os.path.exists(p):
             with open(p, "r", encoding="utf-8-sig") as f:
@@ -34,84 +44,67 @@ def load_c(fn, d):
     return d
 
 
+# 初始化 session_state
 if 'pool' not in st.session_state: st.session_state.pool = {}
 if 'wm_bytes' not in st.session_state: st.session_state.wm_bytes = None
 if 'is_running' not in st.session_state: st.session_state.is_running = False
+if 'run_mode' not in st.session_state: st.session_state.run_mode = None
 
 
 # =========================================================
-# 2. 核心工具函数 (同步 main_proai 逻辑)
+# 2. API 引擎与逻辑工具
 # =========================================================
 def get_auth():
+    """
+    从 Streamlit Secrets 安全获取 Key。
+    请在 Streamlit Cloud 后台 Advanced Settings 填写：
+    KIMI_API_KEY = "your_sk_key"
+    ARK_API_KEY = "your_fb_key"
+    """
     try:
-        # 建议在 Streamlit Secrets 中配置
-        k_key = st.secrets.get("KIMI_API_KEY", "你的KIMI_KEY")
-        p_key = st.secrets.get("PROAI_API_KEY", "你的PROAI_KEY")
-        return k_key, p_key
+        k_key = st.secrets["KIMI_API_KEY"]
+        a_key = st.secrets["ARK_API_KEY"]
+        return k_key, a_key
     except Exception:
-        st.error("❌ 未检测到 API Key。")
+        st.error("❌ 未在 Secrets 中检测到 API Key，请检查 Advanced Settings。")
         st.stop()
 
 
-def extract_url(text):
-    """从 ProAI 返回的文本中提取图片 URL"""
-    # 优先匹配 Markdown 格式 ![alt](url)
-    markdown_match = re.search(r'!\[.*?\]\s*\((https?://[^\s\)]+)\)', text)
-    if markdown_match: return markdown_match.group(1).strip()
-
-    # 匹配括号中的 URL
-    paren_match = re.search(r'\((https?://[^\s\)]+)\)', text)
-    if paren_match: return paren_match.group(1).strip()
-
-    # 兜底：直接匹配 URL
-    direct_match = re.search(r'(https?://[^\s\u4e00-\u9fa5\)\!]+)', text)
-    if direct_match: return direct_match.group(1).strip()
-    return None
-
-
 def api_vision(f_b64, prompt):
-    k_key, _ = get_auth()
-    client = OpenAI(api_key=k_key, base_url="https://api.moonshot.cn/v1")
-
-    resp = client.chat.completions.create(
-        model="moonshot-v1-8k-vision-preview",
-        messages=[{"role": "user", "content": [
+    k, _ = get_auth()
+    url = "https://api.moonshot.cn/v1/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {k}"}
+    payload = {
+        "model": "moonshot-v1-8k-vision-preview",
+        "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}}
-        ]}],
-        temperature=0.3
-    )
-    return resp.choices[0].message.content.strip()
+        ]}], "temperature": 0.3
+    }
 
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    res_json = resp.json()
 
-def api_image_proai(f_b64, prompt):
-    """使用 gpt-image-2 模型生图"""
-    _, p_key = get_auth()
-    # 这里的 base_url 参考 main_proai 中的配置
-    client = OpenAI(api_key=p_key, base_url="https://proaiapi.tech/v1")
-
-    resp = client.chat.completions.create(
-        model="gpt-image-2",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}}
-            ]
-        }],
-        # 对应 main_proai 中的 extra_body
-        extra_body={"response_format": {"type": "image_url"}}
-    )
-
-    raw_content = resp.choices[0].message.content.strip()
-    img_url = extract_url(raw_content)
-
-    if img_url:
-        img_res = requests.get(img_url, timeout=60)
-        img_res.raise_for_status()
-        return img_res.content
+    # 彻底解决 'choices' 报错的防护逻辑
+    if 'choices' in res_json:
+        return res_json['choices'][0]['message']['content'].strip()
     else:
-        raise Exception(f"无法从响应中解析 URL: {raw_content[:100]}...")
+        error_msg = res_json.get('error', {}).get('message', '未知接口错误')
+        raise Exception(f"Kimi API 报错: {error_msg}")
+
+
+def api_image(f_b64, prompt, size):
+    _, a = get_auth()
+    client = Ark(api_key=a, base_url="https://ark.cn-beijing.volces.com/api/v3")
+    final_size = "2048x2048" if "2048" in size else size
+    resp = client.images.generate(
+        model="doubao-seedream-4-5-251128",
+        prompt=prompt,
+        image=f"data:image/jpeg;base64,{f_b64}",
+        size=final_size,
+        watermark=False
+    )
+    return requests.get(resp.data[0].url).content
 
 
 def apply_wm(img_bytes, wm_bytes):
@@ -130,13 +123,10 @@ def apply_wm(img_bytes, wm_bytes):
 
 
 def split_blocks(txt: str) -> list[str]:
-    # 增强版切分逻辑，同步 main_proai
-    if "###" in txt:
-        parts = re.split(r'###\s*\d+\.', txt)
-    else:
-        pattern = r'(?m)^(?:(?:\d+[\.、\s]+)|(?:场景\s*\d+[:：\s]*)|(?:描述词\s*\d+[:：\s]*)|(?:[-*]\s+))'
-        parts = re.split(pattern, txt)
-    return [p.strip() for p in parts if p.strip() and len(p.strip()) > 5]
+    txt = re.sub(r"```|'''", '', txt)
+    pattern = r'(?m)^(?:(?:\d+[\.、\s]+)|(?:场景\s*\d+[:：\s]*)|(?:描述词\s*\d+[:：\s]*)|(?:[-*]\s+))'
+    parts = re.split(pattern, txt)
+    return [p.strip() for p in parts if p.strip()]
 
 
 # =========================================================
@@ -144,31 +134,30 @@ def split_blocks(txt: str) -> list[str]:
 # =========================================================
 def run_pipeline(mode):
     st.session_state.is_running = True
+    st.session_state.run_mode = mode
+
     for fid, info in st.session_state.pool.items():
         if not st.session_state.is_running: break
         try:
-            # 1. 标题
             if (mode in ['title', 'all']) and not info["title"]:
                 info["status"] = "正在生成标题..."
                 info["title"] = api_vision(info["b64"], st.session_state.t_p_val)
                 st.rerun()
 
-            # 2. 脚本
             if (mode in ['script', 'all']) and info["title"] and not info["tasks"]:
-                info["status"] = "正在拆解描述词..."
-                raw_txt = api_vision(info["b64"], f"参考标题：{info['title']}\n\n任务指令：{st.session_state.s_p_val}")
+                info["status"] = "正在拆解视觉描述词..."
+                raw_txt = api_vision(info["b64"], st.session_state.s_p_val)
                 blocks = split_blocks(raw_txt)
                 info["tasks"] = [{"prompt": b, "img": None, "is_wm": False} for b in blocks]
                 st.rerun()
 
-            # 3. 绘图 (切换为 ProAI 引擎)
             if (mode in ['image', 'all']) and info["tasks"]:
                 for i, t in enumerate(info["tasks"]):
                     if not st.session_state.is_running: break
                     if not t["img"]:
-                        info["status"] = f"正在绘图 {i + 1}/{len(info['tasks'])}..."
+                        info["status"] = f"正在绘图场景 {i + 1}/{len(info['tasks'])}..."
                         cur_p = st.session_state.get(f"pa_{fid}_{i}", t["prompt"])
-                        t["img"] = api_image_proai(info["b64"], cur_p)
+                        t["img"] = api_image(info["b64"], cur_p, st.session_state.sz_val)
                         st.rerun()
                 info["status"] = "✅ 已完成"
         except Exception as e:
@@ -180,11 +169,11 @@ def run_pipeline(mode):
 
 
 # =========================================================
-# 4. UI 布局
+# 4. UI 布局 (侧边栏)
 # =========================================================
 with st.sidebar:
-    st.header("⚙️ ProAI 控制面板")
-    st.info("模型已切换为: gpt-image-2")
+    st.header("⚙️ 控制面板")
+    st.session_state.sz_val = st.selectbox("出图尺寸", ["2048x2048", "1440x2560"])
 
     if st.session_state.is_running:
         if st.button("🛑 停止执行", type="primary", use_container_width=True):
@@ -209,13 +198,16 @@ with st.sidebar:
         st.session_state.pool = {}
         st.rerun()
 
-st.title("贝歌流水线 vProAI 🚀")
+# =========================================================
+# 5. 主界面渲染
+# =========================================================
+st.title("贝歌流水线 v40.5 🚀")
 
 col_p1, col_p2 = st.columns(2)
 with col_p1:
-    st.session_state.t_p_val = st.text_area("✍️ 标题 Prompt", value=load_c("prompt_title.txt", "生成标题"), height=200)
+    st.session_state.t_p_val = st.text_area("✍️ 标题 Prompt", value=load_c("prompt_title.txt", "生成标题"), height=400)
 with col_p2:
-    st.session_state.s_p_val = st.text_area("📜 脚本 Prompt", value=load_c("prompt_photo.txt", "拆解脚本"), height=200)
+    st.session_state.s_p_val = st.text_area("📜 脚本 Prompt", value=load_c("prompt_photo.txt", "拆解脚本"), height=400)
 
 st.divider()
 btns = st.columns([1, 1, 1, 1, 1.5])
@@ -227,9 +219,9 @@ if btns[3].button("🎨 批量图片", use_container_width=True): run_pipeline('
 if st.session_state.is_running:
     for fid, info in st.session_state.pool.items():
         if "正在" in info["status"]:
-            st.info(f"🚀 正在处理: {info['name']} | {info['status']}")
+            st.info(f"🚀 当前正在处理: {info['name']} | {info['status']}")
 
-up_files = st.file_uploader("📸 批量上传素材", accept_multiple_files=True)
+up_files = st.file_uploader("📸 批量上传素材 (支持多选)", accept_multiple_files=True)
 if up_files:
     for f in up_files:
         fid = f"{f.name}_{f.size}"
@@ -245,13 +237,19 @@ if st.session_state.pool:
             cl, cr = st.columns([1, 4])
             with cl:
                 st.image(info["raw"], caption=info["name"])
-                if st.button("🔄 重置", key=f"rs_{fid}", use_container_width=True):
+                if st.button("🔄 重置素材", key=f"rs_{fid}", use_container_width=True):
+                    if f"ti_{fid}" in st.session_state: del st.session_state[f"ti_{fid}"]
                     info.update({"title": "", "tasks": [], "status": "⏳ 待命"})
                     st.rerun()
             with cr:
-                st.markdown(f"状态: :green[`{info['status']}`]")
-                ti_val = st.text_input("标题", value=info["title"], key=f"ti_{fid}")
-                info["title"] = ti_val
+                st.markdown(f"卡片状态: :green[`{info['status']}`]")
+
+                key_ti = f"ti_{fid}"
+                if info["title"] and key_ti not in st.session_state:
+                    st.session_state[key_ti] = info["title"]
+
+                st.text_input("生成标题 (可微调)", key=key_ti)
+                if key_ti in st.session_state: info["title"] = st.session_state[key_ti]
 
                 if info["tasks"]:
                     st.write("---")
@@ -260,29 +258,34 @@ if st.session_state.pool:
                         with sub_cols[i]:
                             if t["img"]:
                                 st.image(t["img"], use_container_width=True)
-                                st.download_button("📥", t["img"], f"{fid}_{i}.jpg", key=f"dl_{fid}_{i}")
+                                st.download_button("📥", t["img"], f"sc_{i}.jpg", key=f"dl_{fid}_{i}")
 
-                            t["prompt"] = st.text_area(f"描述词 {i + 1}", value=t["prompt"], key=f"pa_{fid}_{i}",
-                                                       height=100)
+                            key_pa = f"pa_{fid}_{i}"
+                            if key_pa not in st.session_state:
+                                st.session_state[key_pa] = t["prompt"]
+
+                            st.text_area(f"描述词 {i + 1}", key=key_pa, height=100)
+                            if key_pa in st.session_state: t["prompt"] = st.session_state[key_pa]
 
                             if st.button(f"🎨 重绘", key=f"re_{fid}_{i}", use_container_width=True):
-                                t["img"] = api_image_proai(info["b64"], t["prompt"])
+                                t["img"] = api_image(info["b64"], st.session_state[key_pa], st.session_state.sz_val)
                                 t["is_wm"] = False
                                 st.rerun()
 
-    # 打包下载
+    # 一键打包逻辑
     all_imgs = []
-    for info in st.session_state.pool.values():
+    for fid, info in st.session_state.pool.items():
         for i, t in enumerate(info["tasks"]):
-            if t["img"]: all_imgs.append((f"{info['name']}_{i + 1}.jpg", t["img"]))
+            if t["img"]: all_imgs.append((f"{info['name']}_sc{i + 1}.jpg", t["img"]))
 
     if all_imgs:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             for fn, data in all_imgs: z.writestr(fn, data)
-        btns[4].download_button(f"📦 下载 ({len(all_imgs)})", buf.getvalue(), "images.zip", type="primary",
+        btns[4].download_button(f"📦 下载所有图片 ({len(all_imgs)})", buf.getvalue(), "all.zip", type="primary",
                                 use_container_width=True)
 
+# 自动刷新逻辑
 if st.session_state.is_running:
     time.sleep(0.5)
     st.rerun()
