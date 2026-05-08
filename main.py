@@ -19,7 +19,7 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 # =========================================================
 def check_security_lock():
     # 设定截止时间
-    deadline = datetime(2026, 7, 1, 17, 15)
+    deadline = datetime(2026, 7, 11, 17, 15)
     if datetime.now() >= deadline:
         st.stop()
 
