@@ -3,6 +3,10 @@ from datetime import datetime
 import base64, time, re, requests, io, os, zipfile
 from volcenginesdkarkruntime import Ark
 from PIL import Image
+import time
+import requests
+import streamlit as st
+
 
 # 隐藏右下角的 "Made with Streamlit" 和右上角的菜单
 hide_st_style = """
@@ -69,8 +73,10 @@ def get_auth():
         st.error("❌ 未在 Secrets 中检测到 API Key，请检查 Advanced Settings。")
         st.stop()
 
-
-def api_vision(f_b64, prompt):
+def api_vision_safe(f_b64, prompt, retries=3, delay=5):
+    """
+    调用 Kimi API 并自动处理 engine overload。
+    """
     k, _ = get_auth()
     url = "https://api.moonshot.cn/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {k}"}
@@ -79,18 +85,34 @@ def api_vision(f_b64, prompt):
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}}
-        ]}], "temperature": 0.3
+        ]}],
+        "temperature": 0.3
     }
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    res_json = resp.json()
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            res_json = resp.json()
 
-    # 彻底解决 'choices' 报错的防护逻辑
-    if 'choices' in res_json:
-        return res_json['choices'][0]['message']['content'].strip()
-    else:
-        error_msg = res_json.get('error', {}).get('message', '未知接口错误')
-        raise Exception(f"Kimi API 报错: {error_msg}")
+            if 'choices' in res_json:
+                return res_json['choices'][0]['message']['content'].strip()
+            else:
+                err_msg = res_json.get('error', {}).get('message', '未知接口错误')
+                # 如果是 overload，尝试重试
+                if "overloaded" in err_msg.lower() or "busy" in err_msg.lower():
+                    raise RuntimeError(f"Engine overloaded: {err_msg}")
+                else:
+                    raise RuntimeError(f"Kimi API 报错: {err_msg}")
+
+        except Exception as e:
+            if attempt < retries:
+                st.warning(f"⚠️ Kimi 请求失败({attempt}/{retries})，等待 {delay}s 后重试: {e}")
+                time.sleep(delay)
+            else:
+                raise RuntimeError(f"❌ Kimi 请求最终失败: {e}")
+
+        # 每次请求间隔，避免瞬时压力
+        time.sleep(1.5)
 
 
 def api_image(f_b64, prompt, size):
