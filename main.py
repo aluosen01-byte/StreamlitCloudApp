@@ -141,12 +141,12 @@ def run_pipeline(mode):
         try:
             if (mode in ['title', 'all']) and not info["title"]:
                 info["status"] = "正在生成标题..."
-                info["title"] = api_vision(info["b64"], st.session_state.t_p_val)
+                info["title"] = api_vision_safe(info["b64"], st.session_state.t_p_val)
                 st.rerun()
 
             if (mode in ['script', 'all']) and info["title"] and not info["tasks"]:
                 info["status"] = "正在拆解视觉描述词..."
-                raw_txt = api_vision(info["b64"], st.session_state.s_p_val)
+                raw_txt = api_vision_safe(info["b64"], st.session_state.s_p_val)
                 blocks = split_blocks(raw_txt)
                 info["tasks"] = [{"prompt": b, "img": None, "is_wm": False} for b in blocks]
                 st.rerun()
