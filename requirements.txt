@@ -1,5 +1,4 @@
 streamlit
 openai
-volcengine-python-sdk[ark]
 requests
 Pillow
