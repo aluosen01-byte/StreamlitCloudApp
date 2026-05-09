@@ -81,10 +81,9 @@ def api_vision_safe(f_b64, prompt, retries=3, delay=5):
     url = "https://api.moonshot.cn/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {k}"}
     payload = {
-        "model": "moonshot-v1-8k-vision-preview",
+        "model": "moonshot-v1-auto",
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{f_b64}"}}
+            {"type": "text", "text": prompt}
         ]}],
         "temperature": 0.3
     }
