@@ -158,35 +158,85 @@ def run_pipeline(mode):
     st.session_state.run_mode = mode
 
     for fid, info in st.session_state.pool.items():
-        if not st.session_state.is_running: break
+
+        if not st.session_state.is_running:
+            break
+
         try:
+
+            # =====================================================
+            # 1. 标题阶段
+            # =====================================================
             if (mode in ['title', 'all']) and not info["title"]:
+
                 info["status"] = "正在生成标题..."
-                info["title"] = api_vision_safe(info["b64"], st.session_state.t_p_val)
-                st.rerun()
 
+                info["title"] = api_vision_safe(
+                    info["b64"],
+                    st.session_state.t_p_val
+                )
+
+            # =====================================================
+            # 2. 描述词阶段
+            # =====================================================
             if (mode in ['script', 'all']) and info["title"] and not info["tasks"]:
-                info["status"] = "正在拆解视觉描述词..."
-                raw_txt = api_vision_safe(info["b64"], st.session_state.s_p_val)
-                blocks = split_blocks(raw_txt)
-                info["tasks"] = [{"prompt": b, "img": None, "is_wm": False} for b in blocks]
-                st.rerun()
 
+                info["status"] = "正在生成图片描述词..."
+
+                raw_txt = api_vision_safe(
+                    info["b64"],
+                    st.session_state.s_p_val
+                )
+
+                blocks = split_blocks(raw_txt)
+
+                info["tasks"] = [
+                    {
+                        "prompt": b,
+                        "img": None,
+                        "is_wm": False
+                    }
+                    for b in blocks
+                ]
+
+            # =====================================================
+            # 3. 生图阶段
+            # =====================================================
             if (mode in ['image', 'all']) and info["tasks"]:
+
                 for i, t in enumerate(info["tasks"]):
-                    if not st.session_state.is_running: break
+
+                    if not st.session_state.is_running:
+                        break
+
                     if not t["img"]:
-                        info["status"] = f"正在绘图场景 {i + 1}/{len(info['tasks'])}..."
-                        cur_p = st.session_state.get(f"pa_{fid}_{i}", t["prompt"])
-                        t["img"] = api_image(info["b64"], cur_p, st.session_state.sz_val)
-                        st.rerun()
-                info["status"] = "✅ 已完成"
+
+                        info["status"] = (
+                            f"正在生成图片 {i+1}/{len(info['tasks'])}..."
+                        )
+
+                        cur_p = st.session_state.get(
+                            f"pa_{fid}_{i}",
+                            t["prompt"]
+                        )
+
+                        t["img"] = api_image(
+                            info["b64"],
+                            cur_p,
+                            st.session_state.sz_val
+                        )
+
+            info["status"] = "✅ 已完成"
+
         except Exception as e:
+
             info["status"] = f"❌ 失败: {str(e)}"
+
             st.session_state.is_running = False
+
             return
+
     st.session_state.is_running = False
-    st.rerun()
 
 
 # =========================================================
@@ -199,7 +249,7 @@ with st.sidebar:
     if st.session_state.is_running:
         if st.button("🛑 停止执行", type="primary", use_container_width=True):
             st.session_state.is_running = False
-            st.rerun()
+            
 
     st.divider()
     wm_f = st.file_uploader("🖼️ 上传水印 (PNG)", type=["png"])
@@ -213,11 +263,11 @@ with st.sidebar:
                         t["img"] = apply_wm(t["img"], st.session_state.wm_bytes)
                         t["is_wm"] = True
             st.success("水印处理完毕！")
-            st.rerun()
+            
 
     if st.button("🗑️ 清空任务池", use_container_width=True):
         st.session_state.pool = {}
-        st.rerun()
+        
 
 # =========================================================
 # 5. 主界面渲染
@@ -261,7 +311,7 @@ if st.session_state.pool:
                 if st.button("🔄 重置素材", key=f"rs_{fid}", use_container_width=True):
                     if f"ti_{fid}" in st.session_state: del st.session_state[f"ti_{fid}"]
                     info.update({"title": "", "tasks": [], "status": "⏳ 待命"})
-                    st.rerun()
+                    
             with cr:
                 st.markdown(f"卡片状态: :green[`{info['status']}`]")
 
@@ -291,7 +341,7 @@ if st.session_state.pool:
                             if st.button(f"🎨 重绘", key=f"re_{fid}_{i}", use_container_width=True):
                                 t["img"] = api_image(info["b64"], st.session_state[key_pa], st.session_state.sz_val)
                                 t["is_wm"] = False
-                                st.rerun()
+                                
 
     # 一键打包逻辑
     all_imgs = []
@@ -309,4 +359,4 @@ if st.session_state.pool:
 # 自动刷新逻辑
 if st.session_state.is_running:
     time.sleep(0.5)
-    st.rerun()
+    
