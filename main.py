@@ -282,12 +282,12 @@ def api_image(
 
     try:
 
-        p_key = st.secrets["PROAI_API_KEY"]
+        p_key = st.secrets["P_API_KEY"]
 
     except Exception:
 
         raise RuntimeError(
-            "未配置 PROAI_API_KEY"
+            "未配置 P_API_KEY"
         )
 
     client = OpenAI(
