@@ -359,4 +359,5 @@ if st.session_state.pool:
 # 自动刷新逻辑
 if st.session_state.is_running:
     time.sleep(0.5)
+    st.rerun()
     
